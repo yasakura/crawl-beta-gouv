@@ -149,8 +149,10 @@ def render_email(new_jobs: list[dict]) -> tuple[str, str, str]:
 def send_email(subject: str, body_text: str, body_html: str) -> None:
     host = os.environ.get("SMTP_HOST", "smtp.gmail.com")
     port = int(os.environ.get("SMTP_PORT", "465"))
-    user = os.environ["SMTP_USER"]
-    password = os.environ["SMTP_PASS"]
+    user = os.environ["SMTP_USER"].strip()
+    # Gmail shows app passwords as "xxxx xxxx xxxx xxxx" — copy/paste often
+    # pulls regular or non-breaking spaces along. Strip all whitespace.
+    password = "".join(os.environ["SMTP_PASS"].split())
     mail_from = os.environ.get("MAIL_FROM", user)
     mail_to = [a.strip() for a in os.environ["MAIL_TO"].split(",") if a.strip()]
 
