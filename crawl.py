@@ -21,6 +21,7 @@ Flags:
 from __future__ import annotations
 
 import argparse
+import html
 import json
 import os
 import smtplib
@@ -127,14 +128,19 @@ def render_email(new_jobs: list[dict]) -> tuple[str, str, str]:
         lines_text.append(f"  {j['url']}")
         lines_text.append("")
 
-        meta_html = f" <em>({meta})</em>" if meta else ""
+        # title/url/meta come from the Algolia response — escape before
+        # interpolating into HTML so a crafted job listing cannot inject
+        # markup into the email.
+        title_safe = html.escape(j["title"])
+        url_safe = html.escape(j["url"], quote=True)
+        meta_html = f" <em>({html.escape(meta)})</em>" if meta else ""
         pub_html = (
-            f" — <span style='color:#666'>{j['published_at'][:10]}</span>"
+            f" — <span style='color:#666'>{html.escape(j['published_at'][:10])}</span>"
             if j["published_at"]
             else ""
         )
         lines_html.append(
-            f"<li><a href=\"{j['url']}\">{j['title']}</a>{meta_html}{pub_html}</li>"
+            f'<li><a href="{url_safe}">{title_safe}</a>{meta_html}{pub_html}</li>'
         )
     lines_html.append("</ul>")
     lines_html.append(
@@ -146,15 +152,28 @@ def render_email(new_jobs: list[dict]) -> tuple[str, str, str]:
     return subject, "\n".join(lines_text), "".join(lines_html)
 
 
+def _clean_header_value(name: str, value: str) -> str:
+    # Reject CR/LF early so a malformed env var (e.g. a stray newline from a
+    # CI paste) can't sneak extra SMTP headers — fail loudly instead of
+    # producing a cryptic smtplib error later.
+    if "\r" in value or "\n" in value:
+        raise ValueError(f"{name} must not contain CR/LF")
+    return value.strip()
+
+
 def send_email(subject: str, body_text: str, body_html: str) -> None:
-    host = os.environ.get("SMTP_HOST", "smtp.gmail.com")
+    host = _clean_header_value("SMTP_HOST", os.environ.get("SMTP_HOST", "smtp.gmail.com"))
     port = int(os.environ.get("SMTP_PORT", "465"))
-    user = os.environ["SMTP_USER"].strip()
+    user = _clean_header_value("SMTP_USER", os.environ["SMTP_USER"])
     # Gmail shows app passwords as "xxxx xxxx xxxx xxxx" — copy/paste often
     # pulls regular or non-breaking spaces along. Strip all whitespace.
     password = "".join(os.environ["SMTP_PASS"].split())
-    mail_from = os.environ.get("MAIL_FROM", user)
-    mail_to = [a.strip() for a in os.environ["MAIL_TO"].split(",") if a.strip()]
+    mail_from = _clean_header_value("MAIL_FROM", os.environ.get("MAIL_FROM", user))
+    mail_to = [
+        _clean_header_value("MAIL_TO", a)
+        for a in os.environ["MAIL_TO"].split(",")
+        if a.strip()
+    ]
 
     msg = EmailMessage()
     msg["Subject"] = subject
